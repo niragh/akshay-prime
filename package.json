@@ -1,0 +1,19 @@
+{
+  "name": "prime-audiology",
+  "version": "1.0.0",
+  "description": "Prime Audiology - Independent Audiology Clinic Website (George Sebastian)",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx -y serve .",
+    "start": "npx -y serve ."
+  },
+  "keywords": [
+    "audiology",
+    "hearing-aids",
+    "microsuction",
+    "melbourne",
+    "ahpra"
+  ],
+  "author": "LaVue Strategy Team",
+  "license": "ISC"
+}
