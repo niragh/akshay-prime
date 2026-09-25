@@ -10,6 +10,9 @@ document.addEventListener('DOMContentLoaded', () => {
   init360Viewer();
   initHspChecker();
   initBookingForm();
+  if (typeof ExcelManager !== 'undefined') {
+    ExcelManager.init();
+  }
   initFaqAccordion();
 });
 
@@ -39,6 +42,12 @@ function initMobileNavigation() {
   toggleBtn.addEventListener('click', openDrawer);
   if (closeBtn) closeBtn.addEventListener('click', closeDrawer);
   backdrop.addEventListener('click', closeDrawer);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && drawer.classList.contains('open')) {
+      closeDrawer();
+    }
+  });
 
   // Close when clicking any nav link inside drawer
   const links = drawer.querySelectorAll('a');
@@ -274,8 +283,158 @@ function initHspChecker() {
 }
 
 /* ==========================================================================
-   6. DUAL BOOKING FORM WITH EMAIL ROUTING SIMULATION
+   6. EXCEL DATA INTEGRATION & BOOKING FORM MANAGEMENT
    ========================================================================== */
+const ExcelManager = {
+  STORAGE_KEY: 'prime_audiology_appointments_v1',
+  API_PORTS: [3001, 3000],
+
+  getLocalRecords() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (err) {
+      console.warn('localStorage read error:', err);
+      return [];
+    }
+  },
+
+  saveLocalRecords(records) {
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(records));
+    } catch (err) {
+      console.warn('localStorage write error:', err);
+    }
+  },
+
+  async addRecord(entry) {
+    // 1. Always store locally in browser
+    const local = this.getLocalRecords();
+    local.push(entry);
+    this.saveLocalRecords(local);
+
+    // 2. Dispatch to backend API (server.js) to write directly into appointments.xlsx on disk
+    let serverSaved = false;
+    for (const port of this.API_PORTS) {
+      try {
+        const url = (window.location.port && Number(window.location.port) === port)
+          ? '/api/appointments'
+          : `http://localhost:${port}/api/appointments`;
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entry),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const json = await res.json();
+          console.log('[Excel Server] Successfully saved to disk:', json);
+          serverSaved = true;
+          break;
+        }
+      } catch (e) {
+        // Continue to fallback
+      }
+    }
+
+    return { serverSaved, total: local.length };
+  },
+
+  downloadExcelFile() {
+    // Check if XLSX library is loaded
+    if (typeof XLSX !== 'undefined') {
+      const records = this.getLocalRecords();
+      const headers = [
+        'Reference ID',
+        'Date & Time',
+        'Patient Full Name',
+        'Phone Number',
+        'Email Address',
+        'Reason for Visit',
+        'Preferred Date',
+        'Preferred Time',
+        'Notes',
+        'Status'
+      ];
+
+      let sheetData = [];
+      if (records.length === 0) {
+        sheetData = [headers];
+      } else {
+        sheetData = [headers].concat(records.map(r => [
+          r['Reference ID'] || r.refId || '',
+          r['Date & Time'] || r.timestamp || '',
+          r['Patient Full Name'] || r.name || '',
+          r['Phone Number'] || r.phone || '',
+          r['Email Address'] || r.email || '',
+          r['Reason for Visit'] || r.service || '',
+          r['Preferred Date'] || r.date || '',
+          r['Preferred Time'] || r.time || '',
+          r['Notes'] || r.notes || '',
+          r['Status'] || 'New Inquiry'
+        ]));
+      }
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(sheetData);
+      ws['!cols'] = [
+        { wch: 18 }, { wch: 22 }, { wch: 24 }, { wch: 18 }, { wch: 28 },
+        { wch: 35 }, { wch: 18 }, { wch: 22 }, { wch: 35 }, { wch: 15 }
+      ];
+      XLSX.utils.book_append_sheet(wb, ws, 'Appointments');
+      XLSX.writeFile(wb, 'appointments.xlsx');
+      return;
+    }
+
+    // Fallback: download directly from server
+    const a = document.createElement('a');
+    a.href = 'http://localhost:3001/api/appointments/download';
+    a.download = 'appointments.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  },
+
+  updateBadges() {
+    const badges = document.querySelectorAll('#excelEntriesCountBadge');
+    if (!badges.length) return;
+
+    fetch('http://localhost:3001/api/appointments')
+      .then(res => res.json())
+      .then(data => {
+        const count = data.count || 0;
+        badges.forEach(b => {
+          b.textContent = `${count} in appointments.xlsx`;
+        });
+      })
+      .catch(() => {
+        const count = this.getLocalRecords().length;
+        badges.forEach(b => {
+          b.textContent = `${count} in appointments.xlsx`;
+        });
+      });
+  },
+
+  init() {
+    this.updateBadges();
+
+    // Global listener for download buttons
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('#downloadExcelFromModalBtn, #exportAppointmentsExcelBtn');
+      if (btn) {
+        e.preventDefault();
+        this.downloadExcelFile();
+      }
+    });
+  }
+};
+
 function initBookingForm() {
   const form = document.getElementById('appointmentFallbackForm');
   const modal = document.getElementById('confirmationModal');
@@ -289,16 +448,32 @@ function initBookingForm() {
   form.addEventListener('submit', (e) => {
     e.preventDefault();
 
-    const name = form.querySelector('[name="patient_name"]').value.trim();
-    const phone = form.querySelector('[name="patient_phone"]').value.trim();
-    const email = form.querySelector('[name="patient_email"]').value.trim();
-    const service = form.querySelector('[name="service_reason"]').value;
-    const date = form.querySelector('[name="preferred_date"]').value;
-    const time = form.querySelector('[name="preferred_time"]').value;
+    const nameInput = form.querySelector('[name="patient_name"]');
+    const phoneInput = form.querySelector('[name="patient_phone"]');
+    const emailInput = form.querySelector('[name="patient_email"]');
+    const serviceInput = form.querySelector('[name="service_reason"]');
+    const dateInput = form.querySelector('[name="preferred_date"]');
+    const timeInput = form.querySelector('[name="preferred_time"]');
+    const notesInput = form.querySelector('[name="patient_notes"]');
+
+    const name = nameInput ? nameInput.value.trim() : '';
+    const phone = phoneInput ? phoneInput.value.trim() : '';
+    const email = emailInput ? emailInput.value.trim() : '';
+    const service = serviceInput ? serviceInput.value : '';
+    const date = dateInput ? dateInput.value : '';
+    const time = timeInput ? timeInput.value : '';
+    const notes = notesInput ? notesInput.value.trim() : '';
 
     if (!name || !phone || !email || !service) {
       alert('Please fill in your name, phone number, email address, and reason for visit.');
       return;
+    }
+
+    const submitBtn = form.querySelector('#submitBookingBtn');
+    const originalBtnText = submitBtn ? submitBtn.textContent : '';
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving to Excel & Submitting...';
     }
 
     // Populate confirmation modal
@@ -306,15 +481,66 @@ function initBookingForm() {
     if (summaryService) summaryService.textContent = service;
     if (summaryDate) summaryDate.textContent = `${date || 'Earliest Available'} (${time || 'Anytime'})`;
 
-    // Simulated email routing to the required endpoints
-    console.log('--- APPOINTMENT REQUEST DISPATCHED ---');
-    console.log('Recipient 1: GEORGESEBASTIAN@primeaudiology.com.au');
-    console.log('Recipient 2: admin@primeaudiology.com.au');
-    console.log('Payload:', { name, phone, email, service, date, time });
+    const timestamp = new Date().toLocaleString('en-AU', {
+      timeZone: 'Australia/Melbourne',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
 
-    modal.classList.add('active');
-    document.body.style.overflow = 'hidden';
-    form.reset();
+    const refId = 'PA-' + Date.now().toString().slice(-6);
+
+    const newRecord = {
+      'Reference ID': refId,
+      'Date & Time': timestamp,
+      'Patient Full Name': name,
+      'Phone Number': phone,
+      'Email Address': email,
+      'Reason for Visit': service,
+      'Preferred Date': date || 'Earliest Available',
+      'Preferred Time': time || 'Anytime',
+      'Notes': notes,
+      'Status': 'New Inquiry'
+    };
+
+    // Save to Excel
+    ExcelManager.addRecord(newRecord).then(result => {
+      ExcelManager.updateBadges();
+
+      const detail = document.getElementById('excelModalFileDetail');
+      if (detail) {
+        detail.textContent = result.serverSaved
+          ? `Saved to appointments.xlsx on local disk (${result.total} total)`
+          : `Saved to appointments.xlsx (${result.total} total)`;
+      }
+
+      console.log('--- APPOINTMENT REQUEST LOGGED TO EXCEL ---');
+      console.log('Recipient 1: GEORGESEBASTIAN@primeaudiology.com.au');
+      console.log('Recipient 2: admin@primeaudiology.com.au');
+      console.log('Payload:', newRecord);
+
+      modal.classList.add('active');
+      document.body.style.overflow = 'hidden';
+      form.reset();
+
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
+    }).catch(err => {
+      console.error('Error saving to Excel:', err);
+      modal.classList.add('active');
+      document.body.style.overflow = 'hidden';
+      form.reset();
+
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+      }
+    });
   });
 
   if (modalClose) {

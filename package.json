@@ -4,8 +4,9 @@
   "description": "Prime Audiology - Independent Audiology Clinic Website (George Sebastian)",
   "main": "index.html",
   "scripts": {
-    "dev": "npx -y serve .",
-    "start": "npx -y serve ."
+    "dev": "node server.js",
+    "start": "node server.js",
+    "serve": "npx -y serve ."
   },
   "keywords": [
     "audiology",
@@ -15,5 +16,8 @@
     "ahpra"
   ],
   "author": "LaVue Strategy Team",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
 }

@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Temp & Editor files
+~$*.xlsx
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Unzipped DOCX scratch files
+*Content_Types*
+_rels/
+word/
+
+# Scratch & source assets
+pdf_images/
+*.ai
+*.docx
+*.pdf
